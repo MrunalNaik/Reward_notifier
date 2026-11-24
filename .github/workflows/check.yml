@@ -1,0 +1,88 @@
+name: Check gift cards
+
+# Runs in GitHub's cloud, so your PC can be off. No Microsoft login needed.
+on:
+  schedule:
+    # Every 20 min (UTC). Odd minutes avoid GitHub's busy top-of-hour slots;
+    # GitHub may still start runs a few minutes late, which also acts as jitter.
+    - cron: "7,27,47 * * * *"
+  workflow_dispatch:
+    inputs:
+      upload_db:
+        description: "Also upload rewards.db (full check history) as a downloadable artifact"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # to commit history/events.csv
+
+concurrency:
+  group: rewards-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TZ: Asia/Kolkata
+      JITTER_MAX_SECONDS: "0"
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install --quiet python-dotenv
+
+      # state.json + rewards.db live in the Actions cache between runs.
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            state.json
+            rewards.db
+          key: rewards-state-${{ github.run_id }}
+          restore-keys: rewards-state-
+
+      - name: Check
+        # Never fail the job (GitHub would email you every time Bing has a hiccup);
+        # check.py itself notifies you after 3 failures in a row.
+        run: python check.py --no-jitter || echo "check.py exited with code $?"
+
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            state.json
+            rewards.db
+          key: rewards-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Commit restock history / keep schedule alive
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add history/events.csv 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            git commit -m "Update restock history [skip ci]"
+          elif [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt $((45*24*3600)) ]; then
+            # GitHub pauses schedules after 60 days without repo activity.
+            git commit --allow-empty -m "Keep scheduled workflow active [skip ci]"
+          else
+            exit 0
+          fi
+          git pull --rebase --quiet && git push --quiet
+
+      - name: Upload history database
+        if: ${{ inputs.upload_db }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rewards-db
+          path: rewards.db
+          retention-days: 7

@@ -1,0 +1,3 @@
+# Optional: signed-in browser mode (login.py, capture_samples.py, check.py --browser)
+-r requirements.txt
+playwright>=1.48

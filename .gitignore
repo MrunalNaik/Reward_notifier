@@ -1,0 +1,14 @@
+# secrets & personal data
+.env
+profile/
+state.json
+*.db
+*.lock
+logs/
+# captured pages contain your account details (name, points balance)
+samples/
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
