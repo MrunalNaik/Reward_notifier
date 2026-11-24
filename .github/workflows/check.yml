@@ -8,6 +8,14 @@ on:
     - cron: "7,27,47 * * * *"
   workflow_dispatch:
     inputs:
+      test_alert:
+        description: "Just send a test notification (no check)"
+        type: boolean
+        default: false
+      simulate_restock:
+        description: "Run a real check but pretend in-stock cards were out of stock (sends a real restock alert)"
+        type: boolean
+        default: false
       upload_db:
         description: "Also upload rewards.db (full check history) as a downloadable artifact"
         type: boolean
@@ -53,7 +61,15 @@ jobs:
       - name: Check
         # Never fail the job (GitHub would email you every time Bing has a hiccup);
         # check.py itself notifies you after 3 failures in a row.
-        run: python check.py --no-jitter || echo "check.py exited with code $?"
+        run: |
+          if [ "${{ inputs.test_alert }}" = "true" ]; then
+            if [ -z "$NTFY_TOPIC" ]; then echo "::error::NTFY_TOPIC secret is not set"; exit 1; fi
+            python check.py --test-alert
+          elif [ "${{ inputs.simulate_restock }}" = "true" ]; then
+            python check.py --no-jitter --simulate-restock || echo "check.py exited with code $?"
+          else
+            python check.py --no-jitter || echo "check.py exited with code $?"
+          fi
 
       - name: Save state
         if: always()

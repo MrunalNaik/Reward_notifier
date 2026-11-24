@@ -72,6 +72,11 @@ You need a free GitHub account.
 4. **Run it once by hand**: *Actions* tab → **Check gift cards** → **Run
    workflow**. Open the run and check the *Check* step log for a line like
    `OK: 2 cards, 1 in stock ... (first run)`.
+5. **Test the notifications** with the same **Run workflow** button:
+   - tick **Just send a test notification** to check that GitHub can reach your phone;
+   - tick **Run a real check but pretend in-stock cards were out of stock** to
+     get a real-looking `[TEST] ... back in stock` alert. Nothing fake is saved
+     to the history.
 
 After that it runs automatically. Notes:
 

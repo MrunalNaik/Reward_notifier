@@ -5,6 +5,7 @@ Usage:
   python check.py --no-jitter   # run immediately
   python check.py --dry-run     # print alerts instead of sending them
   python check.py --test-alert  # send a test notification and exit
+  python check.py --simulate-restock   # real check + a [TEST] restock alert
   python check.py --browser     # optional: signed-in Playwright mode (adds points balance)
   python check.py --browser --headed   # ...and show the browser
 
@@ -98,7 +99,7 @@ def fmt_card(c: Card, balance: int | None) -> str:
 # --------------------------------------------------------------------------- #
 # main flow
 # --------------------------------------------------------------------------- #
-def handle_success(state: dict, result, ts: str, con, dry_run: bool) -> None:
+def handle_success(state: dict, result, ts: str, con, dry_run: bool, simulate: bool = False) -> None:
     prev = state.get("cards", {})
     current = list(result.cards)
 
@@ -111,14 +112,30 @@ def handle_success(state: dict, result, ts: str, con, dry_run: bool) -> None:
                                 points=old.get("points"), in_stock=bool(old.get("in_stock")),
                                 eligible=old.get("eligible"), source="carried"))
 
-    first_run = not prev
-    changes = diff.compare(prev, current)
-    db.log_events(con, ts,
-                  [(c.sku, c.name, "new") for c in changes.new]
-                  + [(c.sku, c.name, "restocked") for c in changes.restocked]
-                  + [(c.sku, c.name, "out_of_stock") for c in changes.gone_oos]
-                  + [(s, prev[s].get("name", s), "removed") for s in changes.removed],
-                  csv_path=config.EVENTS_CSV)
+    if simulate:
+        # Test mode: pretend every card that is in stock now was out of stock
+        # before, so a real restock alert is sent. Nothing fake is saved:
+        # no events are logged and state below is built from the real scrape.
+        fake_prev = {c.sku: {**c.to_dict(), "listed": True} for c in current}
+        for c in current:
+            if c.in_stock:
+                fake_prev[c.sku] = {**fake_prev[c.sku], "in_stock": False}
+        log.info("SIMULATED RESTOCK: pretending %d in-stock card(s) were out of stock",
+                 sum(c.in_stock for c in current))
+        changes = diff.compare(fake_prev, current)
+        if not changes.restocked:
+            log.warning("No card is in stock right now, so there is nothing to simulate.")
+        first_run = False
+    else:
+        first_run = not prev
+        changes = diff.compare(prev, current)
+    if not simulate:
+        db.log_events(con, ts,
+                      [(c.sku, c.name, "new") for c in changes.new]
+                      + [(c.sku, c.name, "restocked") for c in changes.restocked]
+                      + [(c.sku, c.name, "out_of_stock") for c in changes.gone_oos]
+                      + [(s, prev[s].get("name", s), "removed") for s in changes.removed],
+                      csv_path=config.EVENTS_CSV)
 
     in_stock = [c for c in current if c.in_stock]
     log.info("OK: %d cards, %d in stock, balance=%s | new=%d restocked=%d now_oos=%d removed=%d%s",
@@ -141,6 +158,8 @@ def handle_success(state: dict, result, ts: str, con, dry_run: bool) -> None:
             subject = f"Rewards: new - {what}"
         else:
             subject = f"Rewards: {what} new or restocked"
+        if simulate:
+            subject = "[TEST] " + subject
         body = "\n\n".join(parts)
         if result.balance is not None:
             body += f"\n\nYour balance: {result.balance:,} pts"
@@ -218,7 +237,7 @@ def run(args) -> int:
         db.log_check(con, ts=ts, status=status, duration_s=duration, cards=result.cards,
                      balance=result.balance,
                      error=f"failed: {','.join(result.failed_skus)}" if result.failed_skus else None)
-        handle_success(state, result, ts, con, args.dry_run)
+        handle_success(state, result, ts, con, args.dry_run, simulate=args.simulate_restock)
     else:
         log.warning("%s: %s", status, err)
         db.log_check(con, ts=ts, status=status, duration_s=duration, error=err)
@@ -236,6 +255,8 @@ def main() -> int:
     ap.add_argument("--browser", action="store_true", help="use the signed-in Playwright browser")
     ap.add_argument("--headed", action="store_true", help="with --browser: show the window")
     ap.add_argument("--test-alert", action="store_true", help="send a test alert and exit")
+    ap.add_argument("--simulate-restock", action="store_true",
+                    help="real check, but pretend in-stock cards were out of stock (sends a [TEST] alert)")
     args = ap.parse_args()
     setup_logging()
 
